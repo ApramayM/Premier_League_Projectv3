@@ -1,23 +1,26 @@
 # Touchline
 
-A Premier League prediction market using virtual money, live match odds, persistent portfolios, Google sign-in, and an active-player leaderboard. Prepared for independent hosting in your own Cloudflare account.
+Premier League predictions with virtual money, daily odds snapshots, Google sign-in, persistent portfolios, automatic settlement, and an active-player leaderboard. Built with Next.js for Vercel and Neon Postgres.
 
-- Every new account starts with $1,000 virtual dollars.
-- Aggregate purchase cost in one match is capped at 10% of current bankroll.
-- Winning shares pay $1; losing shares pay $0 after confirmed full-time results.
-- Weekly fixtures load automatically; a native hourly scheduled job settles results and records portfolio history even when nobody has the page open.
+## Game rules
+
+- New players start with $1,000 virtual dollars.
+- The aggregate purchase cost of remaining shares in a match cannot exceed 10% of current bankroll when buying.
+- Confirmed winning shares pay $1; losing shares pay $0. Trading locks at kickoff.
+- Odds are fetched at most once every 24 hours, shared across all players. Page refreshes do not fetch new odds within that window. Expired snapshots pause trading.
+- Official fixtures and results refresh separately; odds refreshes do not drive result settlement.
+- Vercel Hobby runs the background check daily. Opening a portfolio also settles confirmed results.
 - Portfolio history has 7-, 30-, and 90-day views.
-- Active players are ranked by portfolio value and return. Google identities and emails are not displayed publicly.
+- Players who traded in the last 30 days appear on the leaderboard, ranked by total live portfolio value and return. Equal values share a rank. Google names and emails are not published.
 
-See [DEPLOYMENT.md](DEPLOYMENT.md) for hosting, Google setup, backups, and migration requirements.
+## GitHub to Vercel
+
+Connect this repository's main branch to Vercel. Each push produces a deployment; vercel.json selects Next.js, the build command, and a daily cron. See [DEPLOYMENT.md](DEPLOYMENT.md) for setup and migration. GitHub Actions checks the app independently.
 
 ## Development
 
-Use Node.js 22 or later. Run npm ci, npm test, and npm run build. Local D1 migrations: npx wrangler d1 migrations apply DB --local --config wrangler.standalone.jsonc. Start development with npm run dev. Google login requires an authorized origin and configured client ID; no mock identities are accepted.
+Use Node.js 22 or later. Run npm ci, npm test, and npm run build. Copy .env.example to .env.local and set private environment values for a development Postgres database, then run npm run db:migrate and npm run dev. Never connect preview deployments or tests to a production database.
 
-## Status
+## Current configuration requirements
 
-Source is prepared for standalone hosting. Publishing this repository does not deploy a live app. Real Google login and production scheduled execution must be verified after account, database, domain, client ID, and secret configuration. Existing ChatGPT-hosted portfolios are not automatically transferred.
-
-Only virtual money: no deposits, withdrawals, prizes, or real-money bets.
-
+A connected Postgres database, Google web client ID, exact application origin, odds key, and cron secret are required to activate all features. Real Google login must be verified on the configured domain. Existing ChatGPT-hosted balances are not automatically transferred. Only virtual money: no deposits, withdrawals, prizes, or real-money bets.

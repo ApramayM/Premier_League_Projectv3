@@ -1,0 +1,31 @@
+import ts from 'typescript';
+import {readFileSync} from 'node:fs';
+import assert from 'node:assert/strict';
+import {PGlite} from '@electric-sql/pglite';
+const pg=new PGlite();await pg.exec(readFileSync(new URL('../migrations/001_initial.sql',import.meta.url),'utf8'));
+function compile(name,imports={}){let s=ts.transpileModule(readFileSync(new URL('../lib/'+name+'.ts',import.meta.url),'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ES2022}}).outputText;for(const [from,to] of Object.entries(imports))s=s.replaceAll("'"+from+"'",JSON.stringify(to));return 'data:text/javascript;base64,'+Buffer.from(s).toString('base64');}
+const databaseUrl=compile('database',{'@neondatabase/serverless':import.meta.resolve('@neondatabase/serverless')});const {createDatabase}=await import(databaseUrl);
+const database=createDatabase(async(text,values)=>{const r=await pg.query(text,values);return {rows:r.rows,rowCount:r.affectedRows??r.rows.length};});
+globalThis.__touchlineTestDb=database;
+const mockDatabase='data:text/javascript,export const db=()=>globalThis.__touchlineTestDb;';
+const marketUrl=compile('market'),historyUrl=compile('history',{'./market':marketUrl});
+const storeUrl=compile('store',{'./database':mockDatabase,'./market':marketUrl,'./history':historyUrl});const store=await import(storeUrl);
+const {freshAccount,examples,executeTrade,UNIT}=await import(marketUrl);const m=examples[0];
+let account=await store.loadAccount('test:live');assert.equal(account.cash,1000*UNIT);
+const bought=await store.saveAccount('test:live',executeTrade(account,m,'home','buy',100,m.prices[0]));
+await assert.rejects(()=>store.saveAccount('test:live',account),/another request/);
+await store.recordHistory('test:live',bought,[m]);await store.recordHistory('test:live',account,[m]);
+let history=await store.readHistory('test:live');assert.equal(history.length,1);assert.equal(history[0].revision,1);assert.equal(history[0].cash,bought.cash);
+const finals=[{...m,result:'home'}];await store.settleLivePortfolios(finals);await store.settleLivePortfolios(finals);
+const settled=await store.loadAccount('test:live');assert.equal(settled.positions.length,0);assert.equal(settled.cash,bought.cash+100*UNIT);assert.equal(settled.trades.filter(t=>t.kind==='settle').length,1);
+history=await store.readHistory('test:live');assert.equal(history[0].value,settled.cash);
+const policyUrl=compile('odds-policy');const {ODDS_REFRESH_MS,snapshotIsFresh}=await import(policyUrl);assert.equal(snapshotIsFresh(Date.now()-ODDS_REFRESH_MS),false);assert.equal(snapshotIsFresh(Date.now()-3600000),true);
+const feed=await import(compile('feed',{'./store':storeUrl,'./market':marketUrl,'./odds-policy':policyUrl}));
+process.env.ODDS_API_KEY='test-only-key';let requests=0;const originalFetch=globalThis.fetch;
+globalThis.fetch=async()=>{requests++;return Response.json([{id:'test-event',home_team:'Home',away_team:'Away',commence_time:new Date(Date.now()+3*86400000).toISOString(),bookmakers:[{key:'book',title:'Book',last_update:new Date().toISOString(),markets:[{key:'h2h',outcomes:[{name:'Home',price:2},{name:'Draw',price:3},{name:'Away',price:4}]}]}]}]);};
+try{const first=await feed.oddsMarkets();assert.equal(first.markets.length,1);await feed.oddsMarkets();await feed.oddsMarkets();assert.equal(requests,1);assert.ok(feed.fresh(first.markets[0]));
+ await pg.exec("UPDATE feed_cache SET updated=0 WHERE id IN ('epl','odds-attempt')");
+ globalThis.fetch=async()=>{requests++;throw new Error('Simulated provider outage');};
+ const failed=await feed.oddsMarkets();assert.equal(failed.markets[0].closed,true);await feed.oddsMarkets();assert.equal(requests,2);
+ console.log('PASS: PostgreSQL schema, balances, optimistic concurrency, stale-history protection, duplicate settlement, 24-hour odds caching and failure request limits.');
+}finally{globalThis.fetch=originalFetch;delete process.env.ODDS_API_KEY;await pg.close();}
