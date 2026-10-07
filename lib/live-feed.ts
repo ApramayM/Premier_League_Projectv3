@@ -10,8 +10,8 @@ async function fixtureSource(){const row=await db().prepare('SELECT data,updated
  const bootstrap:Bootstrap={teams:b.teams.map(t=>({id:t.id,name:t.name})),events:b.events.map(e=>({id:e.id,name:e.name,is_current:e.is_current,is_next:e.is_next}))};
  const fixtures=f.map(x=>({id:x.id,code:x.code,event:x.event,team_h:x.team_h,team_a:x.team_a,kickoff_time:x.kickoff_time,started:x.started,finished:x.finished,finished_provisional:x.finished_provisional,team_h_score:x.team_h_score,team_a_score:x.team_a_score}));
  const updated=Date.now();await db().prepare('INSERT INTO feed_cache (id,updated,data) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated,data=excluded.data').bind('pl-fixtures',updated,JSON.stringify({bootstrap,fixtures})).run();return {bootstrap,fixtures,updated};}
-export async function liveMarkets():Promise<LiveFeed>{
- const row=await db().prepare('SELECT data,updated FROM feed_cache WHERE id=?').bind('weekly-markets').first<{data:string;updated:number}>();const prior:LiveFeed|null=row?JSON.parse(row.data):null;if(row&&Date.now()-row.updated<60000&&prior)return prior;
+export async function liveMarkets(force=false):Promise<LiveFeed>{
+ const row=await db().prepare('SELECT data,updated FROM feed_cache WHERE id=?').bind('weekly-markets').first<{data:string;updated:number}>();const prior:LiveFeed|null=row?JSON.parse(row.data):null;if(!force&&row&&Date.now()-row.updated<300000&&prior)return prior;
  // One refresher at a time prevents older requests from overwriting newer final scores.
  const now=Date.now();const lease=await db().prepare('INSERT INTO feed_cache (id,updated,data) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated WHERE feed_cache.updated < ?').bind('weekly-refresh-lock',now+45000,'{}',now).run();
  if(lease.meta.changes!==1){if(prior)return prior;return {markets:[],weeks:[],selectedWeek:0,notice:'The weekly schedule is updating. It will appear on the next refresh.',fetchedAt:0,fixturesUpdated:0,fixturesConnected:false};}

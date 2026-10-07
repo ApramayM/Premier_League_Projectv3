@@ -1,7 +1,10 @@
 import {db,settleLivePortfolios} from './store';
 import {liveMarkets} from './live-feed';
+import {refreshDailyOdds} from './feed';
 export async function syncAllPortfolios(){
- const feed=await liveMarkets();let cursor='';let processed=0;let settledAccounts=0;
+ await refreshDailyOdds();
+
+ const feed=await liveMarkets(true);let cursor='';let processed=0;let settledAccounts=0;
  do{const result=await settleLivePortfolios(feed.markets,cursor);processed+=result.processed;settledAccounts+=result.settledAccounts;cursor=result.nextCursor??'';}while(cursor);
  const status={processed,settledAccounts,fixtures:feed.markets.filter(m=>m.fixtureCode).length,confirmedResults:feed.markets.filter(m=>m.result).length,fixturesUpdated:feed.fixturesUpdated,fixturesConnected:feed.fixturesConnected,completedAt:new Date().toISOString(),notice:feed.notice};
  await db().prepare('INSERT INTO feed_cache (id,updated,data) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET updated=excluded.updated,data=excluded.data').bind('sync-status',Date.now(),JSON.stringify(status)).run();

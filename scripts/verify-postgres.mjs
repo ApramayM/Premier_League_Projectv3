@@ -21,11 +21,24 @@ const settled=await store.loadAccount('test:live');assert.equal(settled.position
 history=await store.readHistory('test:live');assert.equal(history[0].value,settled.cash);
 const policyUrl=compile('odds-policy');const {ODDS_REFRESH_MS,snapshotIsFresh}=await import(policyUrl);assert.equal(snapshotIsFresh(Date.now()-ODDS_REFRESH_MS),false);assert.equal(snapshotIsFresh(Date.now()-3600000),true);
 const feed=await import(compile('feed',{'./store':storeUrl,'./market':marketUrl,'./odds-policy':policyUrl}));
-process.env.ODDS_API_KEY='test-only-key';let requests=0;const originalFetch=globalThis.fetch;
-globalThis.fetch=async()=>{requests++;return Response.json([{id:'test-event',home_team:'Home',away_team:'Away',commence_time:new Date(Date.now()+3*86400000).toISOString(),bookmakers:[{key:'book',title:'Book',last_update:new Date().toISOString(),markets:[{key:'h2h',outcomes:[{name:'Home',price:2},{name:'Draw',price:3},{name:'Away',price:4}]}]}]}]);};
-try{const first=await feed.oddsMarkets();assert.equal(first.markets.length,1);await feed.oddsMarkets();await feed.oddsMarkets();assert.equal(requests,1);assert.ok(feed.fresh(first.markets[0]));
- await pg.exec("UPDATE feed_cache SET updated=0 WHERE id IN ('epl','odds-attempt')");
- globalThis.fetch=async()=>{requests++;throw new Error('Simulated provider outage');};
- const failed=await feed.oddsMarkets();assert.equal(failed.markets[0].closed,true);await feed.oddsMarkets();assert.equal(requests,2);
- console.log('PASS: PostgreSQL schema, balances, optimistic concurrency, stale-history protection, duplicate settlement, 24-hour odds caching and failure request limits.');
-}finally{globalThis.fetch=originalFetch;delete process.env.ODDS_API_KEY;await pg.close();}
+process.env.API_FOOTBALL_KEY='test-only-key';let requests=0;const originalFetch=globalThis.fetch;
+const fixture={fixture:{id:42,date:new Date(Date.now()+3*86400000).toISOString()},teams:{home:{name:'Home'},away:{name:'Away'}}};
+const quote={fixture:fixture.fixture,update:new Date().toISOString(),bookmakers:[{id:8,name:'Book',bets:[{id:1,values:[{value:'Home',odd:'2'},{value:'Draw',odd:'3'},{value:'Away',odd:'4'}]}]}]};
+const envelope=(response,pages=1,current=1)=>Response.json({errors:[],response,paging:{current,total:pages}});
+const resetAttempt=()=>pg.exec("DELETE FROM feed_cache WHERE id LIKE 'football-attempt:%'");
+globalThis.fetch=async(url,options)=>{requests++;assert.equal(options.headers['x-apisports-key'],'test-only-key');assert.equal(new URL(url).searchParams.has('apiKey'),false);return envelope(new URL(url).pathname==='/fixtures'?[fixture]:[quote]);};
+try{
+ await Promise.all(Array.from({length:25},()=>feed.oddsMarkets()));assert.equal(requests,0,'Public cache misses never call provider');
+ await Promise.all(Array.from({length:10},()=>feed.refreshDailyOdds()));assert.equal(requests,2,'Only one batch across concurrent jobs');
+ const first=await feed.oddsMarkets();assert.equal(first.markets.length,1);assert.ok(feed.fresh(first.markets[0]));assert.deepEqual(first.markets[0].odds,[2,3,4]);
+ await Promise.all(Array.from({length:25},()=>feed.oddsMarkets()));await feed.refreshDailyOdds();assert.equal(requests,2);
+ await resetAttempt();globalThis.fetch=async()=>{requests++;return Response.json({errors:{plan:'Free plan does not support this season'},response:[],paging:{current:1,total:1}});};
+ const restricted=await feed.refreshDailyOdds();assert.match(restricted.notice,/does not permit this season/);assert.equal(restricted.markets.length,1);await feed.refreshDailyOdds();assert.equal(requests,3,'HTTP 200 errors cannot retry');
+ await resetAttempt();globalThis.fetch=async()=>{requests++;throw new Error('Simulated outage');};await feed.refreshDailyOdds();await feed.refreshDailyOdds();assert.equal(requests,4,'Network errors cannot retry');
+ await resetAttempt();globalThis.fetch=async(url)=>{requests++;return envelope(new URL(url).pathname==='/fixtures'?[fixture]:[quote],new URL(url).pathname==='/fixtures'?1:99);};
+ const oversized=await feed.refreshDailyOdds();assert.match(oversized.notice,/safe daily batch/);assert.equal(requests,6,'Pagination capped before further requests');
+ await pg.exec("UPDATE feed_cache SET data='10' WHERE id LIKE 'football-budget:%'");await resetAttempt();await feed.refreshDailyOdds();assert.equal(requests,6,'Durable budget prevents provider call');
+ const expired={...first.markets[0],snapshotAt:Date.now()-ODDS_REFRESH_MS-1};await database.prepare('UPDATE feed_cache SET data=? WHERE id=?').bind(JSON.stringify({markets:[expired]}),'api-football-epl').run();
+ assert.equal((await feed.oddsMarkets()).markets[0].closed,true);assert.equal(requests,6,'Expired reads cannot retry');
+ console.log('PASS: PostgreSQL balances, concurrency, settlement; cache-only reads; concurrent daily job guard; HTTP 200 errors; outage limits; bounded pagination; durable daily budget; expired-price closure.');
+}finally{globalThis.fetch=originalFetch;delete process.env.API_FOOTBALL_KEY;await pg.close();}

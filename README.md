@@ -7,7 +7,7 @@ Premier League predictions with virtual money, daily odds snapshots, Google sign
 - New players start with $1,000 virtual dollars.
 - The aggregate purchase cost of remaining shares in a match cannot exceed 10% of current bankroll when buying.
 - Confirmed winning shares pay $1; losing shares pay $0. Trading locks at kickoff.
-- Odds are fetched at most once every 24 hours, shared across all players. Page refreshes do not fetch new odds within that window. Expired snapshots pause trading.
+- API-Football odds update in one scheduled batch per UTC day, with a hard 10-request daily ceiling. Page refreshes never call the odds provider. Free-plan current-season access must be verified; expired snapshots pause trading.
 - Official fixtures and results refresh separately; odds refreshes do not drive result settlement.
 - Vercel Hobby runs the background check daily. Opening a portfolio also settles confirmed results.
 - Portfolio history has 7-, 30-, and 90-day views.
